@@ -1,0 +1,76 @@
+1. Install ubuntu server:
+	- powershell.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File .\ubuntu-server-first-run.ps1
+
+2. Start ubuntu server:
+	- powershell.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File .\ubuntu-server-start.ps1
+
+3. Share folder in Windows:
+	- Right click folder -> Properties -> Sharing -> Advanced sharing -> name it "hostshare" + set permissions
+	- and better:
+		1) Create a local user (pick a strong password)
+			$u = "qemuguest"
+			$p = Read-Host "New password for $u" -AsSecureString
+			New-LocalUser -Name $u -Password $p -PasswordNeverExpires -AccountNeverExpires
+
+		2) Give this user NTFS permission on the folder
+			$path = "C:\Users\<your-name>\Desktop\QEMU_Ubuntu\share"
+			icacls $path /grant "${u}:(OI)(CI)M" /t
+
+4. Enable SSH on port 2222:
+	- sudo apt update
+	- sudo apt install -y openssh-server
+	- sudo nano /etc/ssh/sshd_config (change line: Port 2222)
+	- sudo systemctl restart ssh
+	- Connect from Windows: ssh -p 2222 user@<VM_IP>
+
+5. Install base tools in ubuntu:
+	- sudo apt update
+	- sudo apt install -y nano iputils-ping wireguard cifs-utils
+
+6. Mount hostshare:
+	- sudo mkdir -p /mnt/hostshare
+	- sudo mount -t cifs //<WINDOWS_IP>/hostshare /mnt/hostshare -o username=<USER>,password=<PASS>,uid=$(id -u),gid=$(id -g),vers=3.1.1
+	- (optional permanent: add "//<WINDOWS_IP>/hostshare /mnt/hostshare cifs username=<USER>,password=<PASS>,uid=1000,gid=1000,vers=3.1.1 0 0" to /etc/fstab)
+// if hostshare still doesn't work, change /etc/wireguard/wg0.conf -> AllowedIPs = <windows-host IP> <- BUT REVERT LATER BECAUSE IT BREAKS DNS
+
+7. Set up WireGuard:
+	- sudo cp /mnt/hostshare/wg0.conf /etc/wireguard/wg0.conf
+	- sudo chmod 600 /etc/wireguard/wg0.conf
+	- sudo wg-quick up wg0
+	- sudo systemctl enable wg-quick@wg0
+
+8. Install Tor:
+	- sudo apt install -y tor
+
+9. Create Tor instances:
+	- sudo tor-instance-create tor1
+	- sudo tor-instance-create tor2
+	- sudo tor-instance-create tor3
+
+10. Stop Tor services (before restoring keys):
+	- sudo systemctl stop tor tor@tor1 tor@tor2 tor@tor3
+
+11. Restore identity keys from hostshare:
+	- Main relay (/var/lib/tor/keys/) owned by debian-tor
+	- Instances (/var/lib/tor-instances/<name>/keys/) owned by _tor-<name>
+	- Example main:
+		- sudo install -m 600 -o debian-tor -g debian-tor /mnt/hostshare/.../var/lib/tor/keys/secret_id_key /var/lib/tor/keys/secret_id_key
+		- sudo install -m 600 -o debian-tor -g debian-tor /mnt/hostshare/.../var/lib/tor/keys/ed25519_master_id_secret_key /var/lib/tor/keys/ed25519_master_id_secret_key
+	- Example tor1:
+		- sudo install -m 600 -o _tor-tor1 -g _tor-tor1 /mnt/hostshare/.../var/lib/tor-instances/tor1/keys/secret_id_key /var/lib/tor-instances/tor1/keys/secret_id_key
+		- sudo install -m 600 -o _tor-tor1 -g _tor-tor1 /mnt/hostshare/.../var/lib/tor-instances/tor1/keys/ed25519_master_id_secret_key /var/lib/tor-instances/tor1/keys/ed25519_master_id_secret_key
+
+12. Edit configs:
+	- /etc/tor/torrc for main
+	- /etc/tor/instances/torX/torrc for each instance
+	- Minimal example for tor1:
+		Nickname ArkTor1
+		ContactInfo you@example.com
+		SocksPort 0
+		OrPort 9101
+		ExitRelay 0
+		DataDirectory /var/lib/tor-instances/tor1
+
+13. Start Tor services:
+	- sudo systemctl enable tor tor@tor1 tor@tor2 tor@tor3
+	- sudo systemctl start tor tor@tor1 tor@tor2 tor@tor3
